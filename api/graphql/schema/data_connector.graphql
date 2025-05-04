@@ -1,0 +1,310 @@
+# ENTERPRISE DATA CONNECTOR SCHEMA (v2.4.0)
+# ISO/IEC 25012 | NIST SP 800-204 | OASIS OData 4.01
+
+directive @encrypted(
+  algorithm: EncryptionAlgorithm = AES256_GCM
+) on INPUT_FIELD_DEFINITION | ARGUMENT_DEFINITION
+
+directive @masked(
+  pattern: String = "\\X{4}(?=\\X{4})"
+) on FIELD_DEFINITION
+
+type Query {
+  # Connector Operations
+  connector(id: ID!): DataConnector @auth(requires: [READ_CONNECTORS])
+  connectors(
+    type: ConnectorType
+    state: ConnectorState
+    page: Pagination
+  ): ConnectorConnection! @auth(requires: [LIST_CONNECTORS])
+  
+  # Schema Discovery
+  discoverSchema(
+    connectorId: ID!
+    filter: SchemaFilter
+  ): DataSchema! @auth(requires: [SCHEMA_DISCOVERY])
+  
+  # Connectivity Testing
+  testConnection(config: ConnectorConfigInput!): ConnectionTestResult!
+    @auth(requires: [VALIDATE_CONNECTIONS])
+}
+
+type Mutation {
+  # Lifecycle Management
+  createConnector(input: ConnectorInput!): ConnectorOperationResponse!
+    @auth(requires: [CREATE_CONNECTORS])
+  
+  updateConnector(
+    id: ID!
+    config: ConnectorConfigInput!
+  ): ConnectorOperationResponse! @auth(requires: [UPDATE_CONNECTORS])
+  
+  # Security Operations
+  rotateCredentials(id: ID!): SecurityResponse! @auth(requires: [ROTATE_CREDENTIALS])
+  
+  # Data Operations
+  syncConnector(id: ID!): SyncOperation! @auth(requires: [TRIGGER_SYNCS])
+}
+
+type Subscription {
+  # Real-time Monitoring
+  connectorStateChanged(id: ID!): ConnectorState!
+    @auth(requires: [MONITOR_CONNECTORS])
+  
+  dataEvent(connectorId: ID!): DataEvent!
+    @auth(requires: [OBSERVE_DATAFLOWS])
+}
+
+# CORE CONNECTOR TYPES
+type DataConnector @key(fields: "id") {
+  id: ID!
+  name: String!
+  type: ConnectorType!
+  config: ConnectorConfig!
+  state: ConnectorState!
+  statistics: ConnectorStats!
+  schema: DataSchema
+  security: ConnectorSecurity!
+  createdAt: DateTime!
+  lastModified: DateTime!
+}
+
+type ConnectorConfig {
+  endpoint: String! @masked
+  protocol: DataProtocol!
+  authentication: AuthConfig! @masked
+  format: DataFormat!
+  qos: QoSProfile!
+  advanced: JSON
+}
+
+type ConnectorSecurity {
+  certificates: [X509Cert!]!
+  cipherSuites: [CipherSuite!]!
+  lastRotated: DateTime!
+  compliance: ComplianceStatus!
+}
+
+type DataSchema {
+  entities: [EntityDefinition!]!
+  relationships: [EntityRelationship!]!
+  metadata: SchemaMetadata!
+  version: String!
+}
+
+# FEDERATED ENTITIES
+extend type Agent @key(fields: "id") {
+  id: ID! @external
+  connectors: [DataConnector!]!
+}
+
+# INPUT TYPES
+input ConnectorInput {
+  name: String!
+  type: ConnectorType!
+  config: ConnectorConfigInput!
+  securityProfile: SecurityProfileInput
+}
+
+input ConnectorConfigInput {
+  endpoint: String! @encrypted
+  protocol: DataProtocol!
+  credentials: AuthCredentials! @encrypted
+  format: DataFormat!
+  options: JSON
+}
+
+input SchemaFilter {
+  includeTables: [String!]
+  excludePatterns: [String!]
+  sampleSize: Int = 1000
+}
+
+# ENUMERATIONS
+enum ConnectorType {
+  POSTGRESQL
+  MYSQL
+  SQLSERVER
+  ORACLE
+  SNOWFLAKE
+  BIGQUERY
+  KAFKA
+  RABBITMQ
+  S3
+  BLOB
+  SALESFORCE
+  SAP
+  MONGODB
+  REDIS
+  REST
+  GRPC
+  MODBUS
+  OPCUA
+}
+
+enum ConnectorState {
+  CONFIGURING
+  HEALTHY
+  DEGRADED
+  SYNCING
+  ERROR
+  MAINTENANCE
+}
+
+enum DataProtocol {
+  JDBC
+  ODBC
+  AMQP
+  MQTT
+  HTTP
+  HTTPS
+  TCP
+  SFTP
+}
+
+enum CipherSuite {
+  TLS_AES_256_GCM_SHA384
+  TLS_CHACHA20_POLY1305_SHA256
+  TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+}
+
+# PERFORMANCE METRICS
+type ConnectorStats {
+  throughput: ThroughputMetrics!
+  latency: LatencyProfile!
+  errorRate: Float!
+  lastSync: SyncStats
+}
+
+type ThroughputMetrics {
+  read: DataVolume!
+  write: DataVolume!
+  maxCapacity: DataVolume!
+}
+
+type DataVolume {
+  rows: Int!
+  bytes: Int!
+}
+
+# SECURITY TYPES
+type X509Cert {
+  subject: String!
+  issuer: String!
+  validFrom: DateTime!
+  validTo: DateTime!
+  fingerprint: String! @masked
+}
+
+type ComplianceStatus {
+  gdpr: Boolean!
+  hipaa: Boolean!
+  pcidss: Boolean!
+  soc2: Boolean!
+  lastAudited: DateTime!
+}
+
+# ERROR HANDLING
+type ConnectorOperationResponse {
+  success: Boolean!
+  connector: DataConnector
+  errors: [ConnectorError!]
+}
+
+type ConnectorError {
+  code: ConnectorErrorCode!
+  message: String!
+  component: ConnectorComponent
+  timestamp: DateTime!
+}
+
+enum ConnectorErrorCode {
+  CONNECTION_FAILURE
+  AUTH_FAILURE
+  SCHEMA_MISMATCH
+  INVALID_CONFIG
+  PROTOCOL_ERROR
+  RATE_LIMITED
+}
+
+enum ConnectorComponent {
+  NETWORK
+  AUTHENTICATION
+  PARSER
+  SERIALIZER
+  CRYPTO
+}
+
+# DATA EVENT STREAMING
+type DataEvent {
+  timestamp: DateTime!
+  connectorId: ID!
+  operation: DataOperation!
+  payload: JSON
+  metadata: EventMetadata!
+}
+
+enum DataOperation {
+  INSERT
+  UPDATE
+  DELETE
+  MERGE
+  SCHEMA_CHANGE
+}
+
+type EventMetadata {
+  sourceLSN: String
+  kafkaOffset: String
+  sequenceNumber: Int
+}
+
+# COMPLIANCE FEATURES
+type SyncStats {
+  startTime: DateTime!
+  endTime: DateTime!
+  duration: String!
+  rowsSynced: Int!
+  bytesTransferred: Int!
+  checksum: String!
+}
+
+type SyncOperation {
+  id: ID!
+  status: SyncStatus!
+  progress: Float!
+  stats: SyncStats
+}
+
+enum SyncStatus {
+  QUEUED
+  INITIALIZING
+  IN_PROGRESS
+  VALIDATING
+  COMPLETED
+  FAILED
+}
+
+# SECURITY RESPONSE
+type SecurityResponse {
+  success: Boolean!
+  rotatedAt: DateTime
+  errors: [SecurityError!]
+}
+
+type SecurityError {
+  code: SecurityErrorCode!
+  message: String!
+  component: SecurityComponent!
+}
+
+enum SecurityErrorCode {
+  CERT_EXPIRED
+  KEY_ROTATION_FAILURE
+  CIPHER_MISMATCH
+  HSM_UNAVAILABLE
+}
+
+# COMPLEX SCALARS
+scalar JSON
+scalar DateTime
+scalar Byte
