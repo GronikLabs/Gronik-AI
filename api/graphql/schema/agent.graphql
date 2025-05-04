@@ -1,0 +1,288 @@
+# ENTERPRISE AGENT GRAPHQL SCHEMA (v3.1.0)
+# Apollo Federation 2.0 | NIST SP 800-204 | ISO/IEC 27034
+
+directive @auth(
+  requires: [AgentCapability!]
+) on OBJECT | FIELD_DEFINITION
+
+directive @rateLimit(
+  complexity: Int
+  max: Int
+  window: String
+) on FIELD_DEFINITION
+
+directive @sensitive(
+  mask: String = "*****"
+) on FIELD_DEFINITION
+
+scalar DateTime
+scalar JSON
+scalar Byte
+
+type Query {
+  # Agent Operations
+  agent(id: ID!): Agent @auth(requires: [READ_METADATA])
+  agents(
+    filter: AgentFilter
+    page: Pagination
+    sort: [AgentSort!]
+  ): AgentConnection! @auth(requires: [SEARCH_AGENTS])
+  
+  # Cognitive Operations
+  reasoningSession(sessionId: ID!): ReasoningSession @auth(requires: [ACCESS_COGNITIVE])
+  
+  # System Health
+  clusterHealth: ClusterHealth! @auth(requires: [MONITOR_SYSTEM])
+}
+
+type Mutation {
+  # Lifecycle Management
+  createAgent(input: AgentInput!): AgentMutationResponse! 
+    @auth(requires: [PROVISION_AGENTS])
+  
+  updateAgentState(
+    id: ID!
+    state: AgentState!
+  ): AgentMutationResponse! @auth(requires: [CONTROL_LIFECYCLE])
+  
+  # Cognitive Operations  
+  executeReasoning(input: ReasoningInput!): ReasoningResponse!
+    @auth(requires: [INVOKE_REASONING])
+  
+  # Security Operations
+  rotateCredentials(id: ID!): SecurityResponse! @auth(requires: [ROTATE_KEYS])
+}
+
+type Subscription {
+  # Real-time Monitoring
+  agentStateChanged(id: ID!): AgentStateUpdate!
+    @auth(requires: [MONITOR_AGENTS])
+  
+  cognitiveEvent: CognitiveEvent!
+    @auth(requires: [OBSERVE_REASONING])
+}
+
+# CORE AGENT TYPES
+type Agent @key(fields: "id") {
+  id: ID!
+  metadata: AgentMetadata!
+  state: AgentState!
+  capabilities: [AgentCapability!]!
+  communication: AgentComms!
+  cognition: CognitiveProfile!
+  security: SecurityContext!
+  createdAt: DateTime!
+  lastModified: DateTime!
+}
+
+type AgentMetadata {
+  name: String!
+  version: String!
+  description: String
+  labels: [KeyValuePair!]
+  cluster: ClusterReference
+}
+
+type AgentComms {
+  protocols: [CommProtocol!]!
+  endpoints: [CommEndpoint!]!
+  channels: [MessageChannel!]!
+  qos: QoSProfile!
+}
+
+type CognitiveProfile {
+  learningStrategies: [LearningStrategy!]!
+  reasoningEngines: [ReasoningEngine!]!
+  knowledgeGraphs: [KnowledgeGraphRef!]!
+  performanceMetrics: CognitiveMetrics!
+}
+
+type SecurityContext {
+  identity: AgentIdentity!
+  credentials: CredentialState!
+  attestation: AttestationRecord
+  compliance: ComplianceStatus!
+}
+
+# FEDERATED ENTITIES
+extend type Cluster @key(fields: "id") {
+  id: ID! @external
+  agents: [Agent!]!
+}
+
+extend type ReasoningSession @key(fields: "id") {
+  id: ID! @external
+  agent: Agent! @requires(fields: "participants")
+}
+
+# INPUT TYPES
+input AgentInput {
+  metadata: AgentMetadataInput!
+  capabilities: [AgentCapability!]!
+  commsConfig: CommsConfigInput
+  cognitiveProfile: CognitiveProfileInput
+  securityProfile: SecurityProfileInput
+}
+
+input AgentFilter {
+  states: [AgentState!]
+  capabilities: [AgentCapability!]
+  createdAfter: DateTime
+  cluster: ID
+  label: KeyValuePairInput
+}
+
+# ENUMERATIONS
+enum AgentState {
+  PROVISIONING
+  ACTIVE
+  PAUSED
+  DRAINING
+  TERMINATED
+  ERROR
+}
+
+enum AgentCapability {
+  # Core Permissions
+  READ_METADATA
+  SEARCH_AGENTS
+  PROVISION_AGENTS
+  CONTROL_LIFECYCLE
+  MONITOR_AGENTS
+  
+  # Cognitive Permissions  
+  ACCESS_COGNITIVE
+  INVOKE_REASONING
+  MODIFY_KNOWLEDGE
+  OBSERVE_REASONING
+  
+  # Security Permissions
+  ROTATE_KEYS
+  UPDATE_POLICIES
+  AUDIT_LOGS
+}
+
+enum CommProtocol {
+  GRPC
+  MQTT
+  AMQP
+  WEBSOCKET
+  OPCDA
+  MODBUS
+}
+
+# INTERFACE TYPES
+interface CognitiveEvent {
+  timestamp: DateTime!
+  agentId: ID!
+  sessionId: ID
+}
+
+type ReasoningSessionEvent implements CognitiveEvent {
+  timestamp: DateTime!
+  agentId: ID!
+  sessionId: ID!
+  inputHash: Byte!
+  outputHash: Byte!
+  metrics: ReasoningMetrics!
+}
+
+# ERROR TYPES
+type AgentMutationResponse {
+  success: Boolean!
+  agent: Agent
+  errors: [AgentError!]
+}
+
+type AgentError {
+  code: AgentErrorCode!
+  message: String!
+  path: [String!]
+  timestamp: DateTime!
+}
+
+enum AgentErrorCode {
+  PERMISSION_DENIED
+  INVALID_STATE_TRANSITION
+  AGENT_NOT_FOUND
+  CLUSTER_UNAVAILABLE
+  INVALID_INPUT
+  RATE_LIMITED
+}
+
+# PERFORMANCE TYPES
+type CognitiveMetrics {
+  inferenceLatency: Histogram!
+  learningThroughput: Gauge!
+  accuracyScore: Float
+  f1Score: Float
+}
+
+type Histogram {
+  buckets: [Bucket!]!
+  sum: Float!
+  count: Int!
+}
+
+type Bucket {
+  le: Float!
+  count: Int!
+}
+
+# SECURITY TYPES
+type AgentIdentity {
+  certificate: Byte! @sensitive
+  oauthClientId: String @sensitive
+  spiffeId: String
+}
+
+type AttestationRecord {
+  tpmHash: Byte!
+  measuredBoot: Byte!
+  timestamp: DateTime!
+}
+
+# SERVICE MESH INTEGRATION
+type QoSProfile {
+  priority: Int!
+  retryBudget: RetryBudget!
+  circuitBreaker: CircuitBreakerConfig!
+}
+
+type RetryBudget {
+  ratio: Float!
+  minRetries: Int!
+}
+
+type CircuitBreakerConfig {
+  maxFailures: Int!
+  timeout: String!
+}
+
+# PAGINATION
+input Pagination {
+  limit: Int! = 100
+  offset: Int! = 0
+}
+
+type AgentConnection {
+  totalCount: Int!
+  agents: [Agent!]!
+  pageInfo: PageInfo!
+}
+
+type PageInfo {
+  hasNextPage: Boolean!
+  endCursor: String
+}
+
+# UTILITY TYPES
+type KeyValuePair {
+  key: String!
+  value: String!
+}
+
+input KeyValuePairInput {
+  key: String!
+  value: String!
+}
