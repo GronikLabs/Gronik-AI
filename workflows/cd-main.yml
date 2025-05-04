@@ -1,0 +1,270 @@
+name: Production Deployment Pipeline
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/**'
+      - 'helm/**'
+      - '.github/workflows/cd-main.yml'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  KUBE_VERSION: '1.28'
+  HELM_VERSION: '3.14.0'
+  TERRAFORM_VERSION: '1.6.4'
+
+jobs:
+  build-publish:
+    name: Build & Publish Artifacts
+    runs-on: ubuntu-latest
+    environment: production
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      sbom-digest: ${{ steps.sbom.outputs.digest }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Docker Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=long
+            type=ref,event=branch
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:master-rootless
+            network=host
+
+      - name: Cache Docker layers
+        uses: actions/cache@v3
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ hashFiles('Dockerfile') }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Build & Push Container
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache
+
+      - name: Generate SBOM
+        id: sbom
+        uses: anchore/sbom-action@v1
+        with:
+          format: cyclonedx-json
+          output-file: bom-${{ github.sha }}.cdx.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v3
+        with:
+          name: sbom
+          path: bom-${{ github.sha }}.cdx.json
+
+  pre-deployment-checks:
+    name: Security & Compliance Gates
+    runs-on: ubuntu-latest
+    needs: build-publish
+    environment: production
+    steps:
+      - name: Download SBOM
+        uses: actions/download-artifact@v3
+        with:
+          name: sbom
+          path: ./artifacts
+
+      - name: Vulnerability Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          input: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build-publish.outputs.image-tag }}
+          format: 'sarif'
+          exit-code: 1
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+
+      - name: License Compliance
+        uses: fossas/fossa-action@v2
+        with:
+          command: test
+          config-file: ./fossa.yml
+
+      - name: Policy Check
+        uses: open-policy-agent/conftest-action@v1
+        with:
+          policy: ./policy/
+          files: |
+            helm/enliven-agent/values.yaml
+            infrastructure/terraform/**/*.tf
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: pre-deployment-checks
+    environment: staging
+    strategy:
+      matrix:
+        cloud: [aws, azure, gcp]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        if: matrix.cloud == 'aws'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE }}
+          role-session-name: GitHubActions
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Configure Azure Credentials
+        if: matrix.cloud == 'azure'
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Configure GCP Credentials
+        if: matrix.cloud == 'gcp'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Terraform Init
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+
+      - name: Terraform Apply
+        run: |
+          cd infrastructure/terraform/environments/${{ matrix.cloud }}/staging
+          terraform init -backend-config=backend.hcl
+          terraform apply -auto-approve
+
+      - name: Helm Upgrade
+        uses: bitovi/github-actions-deploy-helm@v1
+        with:
+          helm-version: ${{ env.HELM_VERSION }}
+          kube-version: ${{ env.KUBE_VERSION }}
+          namespace: enliven-staging
+          chart: ./helm/enliven-agent
+          values: ./helm/enliven-agent/values-staging.yaml
+          atomic: true
+          timeout: 600s
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    environment: production
+    concurrency: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify Staging Health
+        run: |
+          ./scripts/health-check.sh https://staging.enliven.example.com
+
+      - name: Canary Deployment (5%)
+        uses: actions/helm@v3
+        with:
+          command: upgrade
+          namespace: enliven-prod
+          chart: oci://${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          version: ${{ needs.build-publish.outputs.image-tag }}
+          set: |
+            replicaCount=10
+            autoscaling.enabled=true
+            canary.weight=5
+
+      - name: Full Rollout
+        if: success()
+        uses: actions/helm@v3
+        with:
+          command: upgrade
+          namespace: enliven-prod
+          chart: oci://${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          version: ${{ needs.build-publish.outputs.image-tag }}
+          atomic: true
+          timeout: 900s
+
+      - name: Post-Deployment Tests
+        run: |
+          poetry run pytest tests/smoke/production
+
+      - name: Rollback on Failure
+        if: failure()
+        uses: actions/helm@v3
+        with:
+          command: rollback
+          namespace: enliven-prod
+          release: enliven-agent
+          revision: ${{ github.run_number - 1 }}
+
+  observability:
+    name: Monitoring Setup
+    runs-on: ubuntu-latest
+    needs: deploy-production
+    steps:
+      - name: Deploy Prometheus Stack
+        uses: actions/helm@v3
+        with:
+          command: upgrade
+          chart: prometheus-community/kube-prometheus-stack
+          version: 55.5.1
+          namespace: monitoring
+          create-namespace: true
+          values: |
+            grafana:
+              adminPassword: ${{ secrets.GRAFANA_PWD }}
+
+      - name: Configure Logging
+        uses: elastic/apm-agent-helm@v1
+        with:
+          chart: elastic/elasticsearch
+          version: 8.9.0
+
+      - name: Synthetic Monitoring
+        run: |
+          npm install -g @elastic/synthetics
+          elastic-synthetics ./monitoring/synthetics/
+
+  compliance-report:
+    name: Compliance Documentation
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Generate Audit Trail
+        run: |
+          ./scripts/generate-audit-report.sh
+
+      - name: Upload to Compliance Hub
+        uses: actions/upload-artifact@v3
+        with:
+          name: compliance-${{ github.sha }}
+          path: |
+            audit-report.pdf
+            sbom.cdx.json
+
+      - name: Notify Slack
+        uses: slackapi/slack-github-action@v2
+        with:
+          channel-id: ${{ secrets.SLACK_CHANNEL }}
+          status: ${{ job.status }}
