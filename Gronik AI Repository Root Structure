@@ -1,0 +1,160 @@
+Gronik-AI/
+├── .github/                   # GitHub Automation
+│   ├── workflows/             # CI/CD Pipelines
+│   │   ├── ci-pr.yml          # PR Validation: Unit Tests + Linting
+│   │   ├── cd-main.yml        # Main Branch Deployment (Prod/Staging)
+│   │   ├── security-audit.yml # SAST/SCA Scanning (Trivy/Dependabot)
+│   │   └── release.yml        # Semantic Versioning + CHANGELOG
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── BUG_REPORT.md
+│   │   └── FEATURE_REQUEST.md
+│   └── PULL_REQUEST_TEMPLATE.md
+│
+├── src/                       # Core Application Code
+│   ├── core/                  # Framework Kernel
+│   │   ├── agent/
+│   │   │   ├── lifecycle/     # State Management
+│   │   │   │   ├── state_machine.py
+│   │   │   │   └── health_check.py
+│   │   │   ├── comms/         # Communication Layer
+│   │   │   │   ├── grpc_adapter/
+│   │   │   │   │   ├── agent.proto  # Protocol Buffers
+│   │   │   │   │   └── server.py
+│   │   │   │   └── mqtt_adapter/
+│   │   │   │       ├── client.py
+│   │   │   │       └── message_broker.py
+│   │   │   └── cognitive/     # AI Components
+│   │   │       ├── reasoning/
+│   │   │       │   ├── hybrid_engine.py  # Rules + ML
+│   │   │       │   └── knowledge_graph/
+│   │   │       │       ├── neo4j_connector.py
+│   │   │       │       └── ontology_manager.py
+│   │   │       └── learning/
+│   │   │           ├── federated/
+│   │   │           │   ├── secure_aggregation.py
+│   │   │           │   └── differential_privacy.py
+│   │   │           └── reinforcement/
+│   │   │               └── policy_optimizer.py
+│   │   ├── orchestration/     # Cluster Management
+│   │   │   ├── kubernetes/
+│   │   │   │   ├── operator.py       # Custom K8s Operator
+│   │   │   │   └── resource_monitor.py
+│   │   │   └── scheduler/
+│   │   │       ├── priority_queue.py
+│   │   │       └── load_balancer.py
+│   │   └── security/         # Zero-Trust Security
+│   │       ├── authentication/
+│   │       │   ├── oauth2_adapter.py
+│   │       │   └── mTLS_handler.py
+│   │       └── encryption/
+│   │           ├── homomorphic.py
+│   │           └── key_management.py
+│   ├── adapters/              # Enterprise Integrations
+│   │   ├── erp/
+│   │   │   ├── sap/
+│   │   │   │   ├── ecc_connector.py
+│   │   │   │   └── s4hana_adapter.py
+│   │   │   └── oracle/
+│   │   │       └── netsuite_client.py
+│   │   ├── crm/
+│   │   │   ├── salesforce/
+│   │   │   │   └── aura_api.py
+│   │   │   └── hubspot/
+│   │   │       └── graphql_client.py
+│   │   └── iot/
+│   │       ├── opcua_adapter.py
+│   │       └── modbus_handler.py
+│   └── api/                   # External Interfaces
+│       ├── graphql/
+│       │   ├── schema/        # Apollo Federation
+│       │   │   ├── agent.graphql
+│       │   │   └── data_connector.graphql
+│       │   └── server.py
+│       └── rest/
+│           ├── openapi/       # Swagger/Redoc
+│           │   └── enliven-api.yaml
+│           └── routes/
+│               ├── v1/
+│               │   ├── agents.py
+│               │   └── tasks.py
+│               └── v2/
+│                   └── cognitive.py
+│
+├── tests/                     # Comprehensive Testing
+│   ├── unit/
+│   │   ├── core/
+│   │   │   └── agent/
+│   │   │       └── test_state_machine.py
+│   │   └── adapters/
+│   │       └── test_sap_ecc.py
+│   ├── integration/
+│   │   ├── k8s/
+│   │   │   └── test_cluster_scaling.py
+│   │   └── security/
+│   │       └── test_mTLS_handshake.py
+│   ├── performance/           # Load/Stress Tests
+│   │   ├── locustfile.py
+│   │   └── jmeter/
+│   │       └── agent_load.jmx
+│   └── fixtures/              # Test Data
+│       ├── sample_agents.json
+│       └── mock_responses/
+│           └── salesforce/
+│               └── opportunity.json
+│
+├── infrastructure/            # IaC
+│   ├── terraform/
+│   │   ├── modules/
+│   │   │   ├── aws_eks/
+│   │   │   └── azure_aks/
+│   │   └── environments/
+│   │       ├── prod/
+│   │       │   └── main.tf
+│   │       └── staging/
+│   │           └── main.tf
+│   └── helm/
+│       ├── enliven-agent/
+│       │   ├── charts/
+│       │   │   ├── postgresql/
+│       │   │   └── redis/
+│       │   ├── templates/
+│       │   │   ├── deployment.yaml
+│       │   │   └── service.yaml
+│       │   └── values.yaml
+│       └── monitoring/
+│           └── prometheus-stack/
+│
+├── docs/                      # Technical Documentation
+│   ├── ARCHITECTURE.md        # C4 Diagrams
+│   ├── ADAPTERS.md           # Integration Guide
+│   ├── API_GUIDE.md          # REST/GraphQL Usage
+│   └── CONTRIBUTING.md        # Development Workflow
+│
+├── scripts/                   # Automation Scripts
+│   ├── deployment/
+│   │   ├── rollback.sh
+│   │   └── canary_deploy.py
+│   └── maintenance/
+│       ├── db_migrate.py
+│       └── log_cleaner.sh
+│
+├── config/                    # Environment Configs
+│   ├── dev.env
+│   ├── prod.env
+│   └── feature_flags.yaml
+│
+├── third_party/              # Vendor-Specific Code
+│   └── licensed/
+│       ├── sap/
+│       │   └── proprietary_client.py
+│       └── azure/
+│           └── cognitive_services.py
+│
+├── .gitignore
+├── pyproject.toml            # PEP 621 Config
+├── requirements.txt           # Pip Deps (Legacy)
+├── Dockerfile                # Multi-Stage Build
+├── docker-compose.yml        # Local Dev
+├── Makefile                  # Common Tasks
+├── LICENSE                   # Apache 2.0
+└── README.md                 # Project Hu
