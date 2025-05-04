@@ -1,0 +1,215 @@
+name: Security Audit & Compliance
+
+on:
+  schedule:
+    - cron: '0 0 * * 1' # Weekly audits every Monday 00:00 UTC
+  workflow_dispatch:
+    inputs:
+      scan-depth:
+        description: 'Scan intensity level'
+        required: true
+        default: 'deep'
+        type: choice
+        options: ['light', 'deep']
+
+env:
+  SARIF_CATEGORY: 'enliven-security'
+  DOCKER_IMAGE: 'ghcr.io/${{ github.repository }}'
+  SPDX_VERSION: '2.3'
+
+jobs:
+  dependency-audit:
+    name: Dependency Chain Analysis
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        language: [python, javascript, go, rust]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Snyk Deep Scan
+        uses: snyk/actions/${{ matrix.language }}@v3
+        with:
+          command: test
+          args: |
+            --severity-threshold=medium 
+            --fail-on=all 
+            --scan-all-unmanaged 
+            --exclude=dev
+          sarif-file-output: snyk-${{ matrix.language }}.sarif
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+      - name: Upload to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: snyk-${{ matrix.language }}.sarif
+          category: ${{ env.SARIF_CATEGORY }}
+
+      - name: Generate SPDX SBOM
+        if: matrix.language == 'python'
+        uses: cyclonedx/gh-action@v1
+        with:
+          output-format: spdx-json
+          output-file: bom-${{ matrix.language }}.spdx.json
+          spec-version: ${{ env.SPDX_VERSION }}
+
+  container-scan:
+    name: Container & Runtime Security
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Full Container Analysis
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.DOCKER_IMAGE }}
+          format: 'sarif'
+          template: '@/contrib/sarif.tpl'
+          output: trivy-container.sarif
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          scanners: 'vuln,config,secret,license'
+          ignore-unfixed: false
+          list-all-pkgs: true
+
+      - name: CIS Docker Benchmark
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/kube-bench:latest \
+            --benchmark cis-docker-1.6.0 \
+            --json > cis-docker.json
+
+      - name: Runtime Behavior Analysis
+        uses: trailofbits/maat@v1
+        with:
+          image: ${{ env.DOCKER_IMAGE }}
+          output: runtime-analysis.json
+
+  iac-validation:
+    name: Infrastructure as Code Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Terraform Compliance Check
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infrastructure/terraform
+          framework: terraform
+          soft-fail: false
+          output: sarif
+          output-file-path: checkov-terraform.sarif
+        env:
+          CHECKOV_API_KEY: ${{ secrets.CHECKOV_KEY }}
+
+      - name: Kubernetes Policy Validation
+        uses: stackrox/kube-linter-action@v1
+        with:
+          config: .kubelinter.yaml
+          output: sarif
+          output-file: kube-linter.sarif
+
+  secret-scan:
+    name: Secrets Detection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: TruffleHog Deep Scan
+        uses: dxa4481/trufflehog@v3
+        with:
+          args: --regex --entropy=False --max_depth=20
+          output-file: trufflehog-results.sarif
+
+      - name: GitLeaks History Scan
+        uses: zricethezav/gitleaks-action@v2
+        with:
+          config-path: .gitleaks.toml
+          extra-args: --log-opts=--all
+          sarif-output: gitleaks.sarif
+
+  compliance-report:
+    name: Regulatory Compliance
+    runs-on: ubuntu-latest
+    needs: [dependency-audit, container-scan, iac-validation]
+    steps:
+      - name: Collect Audit Artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: ./artifacts
+
+      - name: Generate SOC2 Report
+        run: |
+          ./compliance-tools/soc2-generator \
+            --input artifacts/*.sarif \
+            --output soc2-report.pdf
+
+      - name: GDPR Checklist Validation
+        uses: legalos/gha-gdpr-check@v2
+        with:
+          data-flow-map: ./gdpr/data-flow.yaml
+          output: gdpr-compliance.json
+
+      - name: Upload to Compliance Hub
+        uses: actions/upload-artifact@v3
+        with:
+          name: compliance-${{ github.run_id }}
+          path: |
+            soc2-report.pdf
+            gdpr-compliance.json
+
+  policy-enforcement:
+    name: Automated Policy Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: OPA Policy Evaluation
+        uses: open-policy-agent/conftest-action@v1
+        with:
+          policy: ./policy/
+          files: |
+            **/*.yaml
+            **/*.json
+            **/*.tf
+          output: table
+
+      - name: SLSA Provenance
+        uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v1
+        with:
+          base64-subjects: true
+          upload-assets: true
+
+  notification:
+    name: Security Alerts
+    runs-on: ubuntu-latest
+    needs: 
+      - compliance-report
+      - policy-enforcement
+    if: always()
+    steps:
+      - name: Send Slack Alert
+        if: failure()
+        uses: slackapi/slack-github-action@v2
+        with:
+          channel-id: ${{ secrets.SLACK_SECURITY_CHANNEL }}
+          status: ${{ job.status }}
+          message: 'Security audit failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+
+      - name: Create Security Ticket
+        if: failure()
+        uses: actions/github-script@v7
+        env:
+          SCAN_RESULTS: ${{ toJSON(needs) }}
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[Security] Audit Failure in Run ${context.runNumber}`,
+              body: `## Security Audit Failure\n\n**Failed Jobs:**\n${Object.keys(env.SCAN_RESULTS).filter(j => env.SCAN_RESULTS[j].result === 'failure').join('\n')}\n\n[View Full Report](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`,
+              labels: ['security', 'bug']
+            })
